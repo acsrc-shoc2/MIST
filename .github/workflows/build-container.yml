@@ -1,0 +1,38 @@
+  name: Build Apptainer Container
+
+  on:
+    push:
+      paths:
+        - 'mist.def'
+        - '.github/workflows/build-container.yml'
+    workflow_dispatch:
+
+  permissions:
+    packages: write
+    contents: read
+
+  jobs:
+    build:
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v4
+
+        - name: Install Apptainer
+          uses: eWaterCycle/setup-apptainer@v2
+          with:
+            apptainer-version: 1.3.4
+
+        - name: Build container
+          run: sudo apptainer build mist.sif mist.def
+
+        - name: Upload built .sif as artifact
+          uses: actions/upload-artifact@v4
+          with:
+            name: mist-sif
+            path: mist.sif
+
+        - name: Push to GHCR
+          run: |
+            echo "${{ secrets.GITHUB_TOKEN }}" | apptainer registry login --username ${{ github.actor }} --password-stdin oras://ghcr.io
+            REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+            apptainer push mist.sif oras://ghcr.io/${REPO_LOWER}/mist:latest

@@ -1,0 +1,123 @@
+# Plain Ubuntu, not the nvcr.io/nvidia/pytorch base that upstream's
+# container/training.def uses. That NGC image is ~20 GB and exists to support
+# distributed pre-training; the SHOC2 use case is inference and fine-tuning
+# from the published checkpoints, where the torch wheel's own vendored CUDA
+# userspace is sufficient. `apptainer --nv` supplies the host driver.
+Bootstrap: docker
+From: ubuntu:22.04
+
+%labels
+    Application mist
+    Source https://github.com/BattModels/mist
+    Version 0.1.0
+
+%help
+    Apptainer container for MIST (Molecular Insight SMILES Transformer):
+    a family of molecular foundation models for property prediction,
+    pre-trained on Smirk-tokenized SMILES from Enamine REAL Space.
+    (arXiv:2510.18900)
+    https://github.com/BattModels/mist
+
+    The uv-managed virtual environment at /opt/mist/.venv is on PATH, so
+    `python` inside the container is already the MIST environment.
+
+    Model weights are NOT baked into this image. build_mist.sh pre-downloads
+    them from Hugging Face into a bind-mounted cache, because NeSI compute
+    nodes have no outbound internet access.
+
+%environment
+    export MIST_HOME=/opt/mist
+    export VIRTUAL_ENV=/opt/mist/.venv
+    export PATH="/opt/mist/.venv/bin:/usr/local/bin:${PATH}"
+    export PYTHONPATH="/opt/mist:${PYTHONPATH}"
+    export UV_PROJECT_ENVIRONMENT=/opt/mist/.venv
+    export UV_FROZEN=1
+    # Hugging Face cache lives in bind-mounted project space, not $HOME.
+    # HF_HUB_OFFLINE stops transformers reaching out from a compute node;
+    # unset it if you are on a login node and want to fetch a new checkpoint.
+    export HF_HOME=/opt/mist/hf_cache
+    export HF_HUB_OFFLINE=1
+    export TOKENIZERS_PARALLELISM=false
+    export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
+
+%post
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+
+    echo "===== Installing system packages ====="
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        git \
+        wget \
+        curl \
+        vim \
+        ca-certificates \
+        build-essential \
+        libxrender1 \
+        libxext6 \
+        libgl1 \
+        libglib2.0-0
+    rm -rf /var/lib/apt/lists/*
+
+    echo "===== Installing uv ====="
+    wget -qO /tmp/uv.tar.gz \
+        https://github.com/astral-sh/uv/releases/download/0.11.32/uv-x86_64-unknown-linux-gnu.tar.gz
+    tar -xzf /tmp/uv.tar.gz -C /tmp
+    mv /tmp/uv-x86_64-unknown-linux-gnu/uv /usr/local/bin/uv
+    mv /tmp/uv-x86_64-unknown-linux-gnu/uvx /usr/local/bin/uvx
+    chmod +x /usr/local/bin/uv /usr/local/bin/uvx
+    rm -rf /tmp/uv.tar.gz /tmp/uv-x86_64-unknown-linux-gnu
+
+    echo "===== Installing Rust ====="
+    # smirk is a Rust extension. PyPI does not publish wheels for every
+    # interpreter/platform combination, so keep a toolchain available to build
+    # it from source if no matching wheel exists.
+    export RUSTUP_HOME=/opt/rust CARGO_HOME=/opt/cargo
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile=minimal
+    export PATH="/opt/cargo/bin:${PATH}"
+    rustc --version
+
+    echo "===== Cloning MIST ====="
+    git clone --depth 1 https://github.com/BattModels/mist.git /opt/mist
+
+    echo "===== Creating the environment with uv ====="
+    # --frozen installs exactly what uv.lock pins, with no re-resolution.
+    # This includes deepspeed built from a git tag, which is only needed for
+    # distributed pre-training but is a hard dependency upstream.
+    cd /opt/mist
+    export UV_CACHE_DIR=/tmp/uv-cache
+    export UV_PROJECT_ENVIRONMENT=/opt/mist/.venv
+    uv sync --frozen --link-mode=copy --compile-bytecode --no-cache
+
+    echo "===== Adding ipykernel for the JupyterLab kernel ====="
+    # Not in MIST's dependency groups, so add it explicitly rather than
+    # pulling in the whole dev group (pytest, pre-commit, ruff).
+    uv pip install ipykernel ipywidgets matplotlib
+
+    echo "===== Creating bind-mount targets ====="
+    mkdir -p /opt/mist/hf_cache /opt/mist/output
+
+    echo "===== Cleaning up ====="
+    # Rust is a build-time dependency only: it exists in case smirk has to be
+    # compiled from source. Once the venv is built the toolchain is dead
+    # weight, and it is well over a gigabyte, so drop it from the image.
+    rm -rf /tmp/uv-cache /opt/rust /opt/cargo
+    apt-get clean
+
+%runscript
+    export PATH="/opt/mist/.venv/bin:${PATH}"
+    cd /opt/mist
+    exec "$@"
+
+%test
+    export PATH="/opt/mist/.venv/bin:${PATH}"
+    export PYTHONPATH="/opt/mist:${PYTHONPATH}"
+    python --version
+    python -c "import torch; print('PyTorch:', torch.__version__)"
+    python -c "import transformers; print('transformers:', transformers.__version__)"
+    python -c "import smirk; print('smirk OK')"
+    python -c "import rdkit; print('RDKit:', rdkit.__version__)"
+    python -c "import deepspeed; print('deepspeed:', deepspeed.__version__)"
+    python -c "import electrolyte_fm; print('electrolyte_fm OK')"
+    python -c "import ipykernel; print('ipykernel OK')"
+    echo "All tests passed"
