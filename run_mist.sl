@@ -1,4 +1,10 @@
-#!/bin/bash -e
+#!/bin/bash -le
+
+# -l makes this a login shell so the NeSI arch module (NeSI/zen3) is
+# initialised before `module load` runs. Without it the script only works when
+# submitted from a session that already has modules loaded, such as an Open
+# OnDemand terminal; submitted over plain ssh or from cron it fails with
+# "JupyterLab ... cannot be loaded as requested" and papermill: command not found.
 
 #SBATCH --time          1:00:00
 #SBATCH --mem           20GB
