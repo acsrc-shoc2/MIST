@@ -60,13 +60,16 @@ From: ubuntu:22.04
     rm -rf /var/lib/apt/lists/*
 
     echo "===== Installing uv ====="
-    wget -qO /tmp/uv.tar.gz \
+    # Unpack inside the image, not /tmp: the host's /tmp is bind-mounted into
+    # the build, so these paths would be shared with other users of the node.
+    mkdir -p /opt/build
+    wget -qO /opt/build/uv.tar.gz \
         https://github.com/astral-sh/uv/releases/download/0.11.32/uv-x86_64-unknown-linux-gnu.tar.gz
-    tar -xzf /tmp/uv.tar.gz -C /tmp
-    mv /tmp/uv-x86_64-unknown-linux-gnu/uv /usr/local/bin/uv
-    mv /tmp/uv-x86_64-unknown-linux-gnu/uvx /usr/local/bin/uvx
+    tar -xzf /opt/build/uv.tar.gz -C /opt/build
+    mv /opt/build/uv-x86_64-unknown-linux-gnu/uv /usr/local/bin/uv
+    mv /opt/build/uv-x86_64-unknown-linux-gnu/uvx /usr/local/bin/uvx
     chmod +x /usr/local/bin/uv /usr/local/bin/uvx
-    rm -rf /tmp/uv.tar.gz /tmp/uv-x86_64-unknown-linux-gnu
+    rm -rf /opt/build
 
     echo "===== Installing Rust ====="
     # smirk is a Rust extension. PyPI does not publish wheels for every
@@ -85,7 +88,15 @@ From: ubuntu:22.04
     # This includes deepspeed built from a git tag, which is only needed for
     # distributed pre-training but is a hard dependency upstream.
     cd /opt/mist
-    export UV_CACHE_DIR=/tmp/uv-cache
+    # Deliberately NOT under /tmp. Apptainer bind-mounts the host's /tmp into
+    # the build, so /tmp/uv-cache here is the build machine's /tmp/uv-cache,
+    # shared with every other user of that node. On a NeSI login node it may
+    # already exist owned by someone else, and uv then dies with
+    # "Failed to initialize cache at /tmp/uv-cache: Permission denied".
+    # Worse, the cleanup below would be deleting that user's directory rather
+    # than ours. Keeping the cache inside the image makes the build
+    # self-contained and independent of whatever node it runs on.
+    export UV_CACHE_DIR=/opt/uv-cache
     export UV_PROJECT_ENVIRONMENT=/opt/mist/.venv
     uv sync --frozen --link-mode=copy --compile-bytecode --no-cache
 
@@ -109,7 +120,7 @@ From: ubuntu:22.04
     # Rust is a build-time dependency only: it exists in case smirk has to be
     # compiled from source. Once the venv is built the toolchain is dead
     # weight, and it is well over a gigabyte, so drop it from the image.
-    rm -rf /tmp/uv-cache /opt/rust /opt/cargo
+    rm -rf /opt/uv-cache /opt/rust /opt/cargo
     apt-get clean
 
 %runscript
