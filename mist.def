@@ -92,7 +92,15 @@ From: ubuntu:22.04
     echo "===== Adding ipykernel for the JupyterLab kernel ====="
     # Not in MIST's dependency groups, so add it explicitly rather than
     # pulling in the whole dev group (pytest, pre-commit, ruff).
-    uv pip install ipykernel ipywidgets matplotlib
+    #
+    # pip is in that list because nesi-add-kernel runs
+    # `python -m pip install ipykernel` inside the container unconditionally,
+    # without first checking whether ipykernel is present. uv-created venvs do
+    # not seed pip, so without it kernel registration fails with "No module
+    # named pip". With pip available the call reports the requirement as
+    # already satisfied and writes nothing, which matters because the image is
+    # read-only by then.
+    uv pip install pip ipykernel ipywidgets matplotlib
 
     echo "===== Creating bind-mount targets ====="
     mkdir -p /opt/mist/hf_cache /opt/mist/output
