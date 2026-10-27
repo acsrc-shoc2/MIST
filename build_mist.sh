@@ -70,6 +70,45 @@ chgrp -R "$GROUP" "$PROJDIR"
 chmod -R g+rwX "$PROJDIR"
 
 # ---------------------------------------------------------------------------
+# Verify every checkpoint is complete and loadable offline.
+#
+# A directory check is not enough: an interrupted snapshot_download leaves a
+# partial tree behind that looks present but is missing weights. Asking
+# huggingface_hub to resolve each snapshot with local_files_only=True is the
+# same resolution the notebook will do on a compute node, so if this passes,
+# the offline load there will too. Without it a half-finished download here
+# surfaces much later as a missing-file error inside a notebook cell, on a
+# node with no internet access to recover from it.
+# ---------------------------------------------------------------------------
+echo "Verifying the checkpoints resolve offline"
+VERIFY_LOG=$(mktemp)
+for m in $MODELS; do
+    if apptainer exec \
+        --env HF_HUB_OFFLINE=1 \
+        --env HF_HOME="$APPTAINER_HOME/hf_cache" \
+        -B "$PROJDIR/hf_cache:$APPTAINER_HOME/hf_cache" \
+        mist.sif \
+        python -c "from huggingface_hub import snapshot_download; snapshot_download('$m', local_files_only=True)" \
+        >/dev/null 2>"$VERIFY_LOG"; then
+        echo "  OK         $m"
+    else
+        echo "  INCOMPLETE $m" >&2
+        # Print why. Without this, any failure to run the container at all
+        # reads as "every checkpoint is incomplete", which sends you looking
+        # in the wrong place.
+        sed 's/^/             /' "$VERIFY_LOG" | tail -3 >&2
+        MISSING=1
+    fi
+done
+rm -f "$VERIFY_LOG"
+if [ -n "$MISSING" ]; then
+    echo "ERROR: one or more checkpoints are missing or incomplete." >&2
+    echo "Re-run this script; snapshot_download resumes what is already there." >&2
+    echo "If it keeps failing, delete $PROJDIR/hf_cache and start again." >&2
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
 # Register the JupyterLab kernel
 # ---------------------------------------------------------------------------
 module load JupyterLab/2026.7.0-foss-2026-4.6.0
