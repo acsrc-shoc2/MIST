@@ -4,14 +4,18 @@
 #SBATCH --mem           20GB
 #SBATCH --cpus-per-task 4
 #SBATCH --account       uoa04517
-#SBATCH --gpus-per-node A100:1
+#SBATCH --gpus-per-node l4:1
+##SBATCH --gpus-per-node a100:1
 #SBATCH --job-name      mist
 #SBATCH --output        mist.log
 
-# MIST-26.9M is small enough that CPU inference is viable, so for the
-# prediction workflows in mist.ipynb you can drop the --gpus-per-node line
-# entirely and the notebook will fall back to CPU. A GPU is worth requesting
-# for fine-tuning or for large batches of SMILES.
+# The container is CUDA 12.8, which the NeSI driver (580.95.05) supports.
+#
+# l4 is the default because the a100 queue is by far the longest on Mahuika
+# and these models do not need it. MIST-26.9M is small enough that CPU
+# inference is viable, so you can also drop the --gpus-per-node line entirely
+# and the notebook will fall back to CPU. Uncomment the a100 line for
+# fine-tuning or large batches of SMILES.
 
 module load JupyterLab/2026.7.0-foss-2026-4.6.0
 
